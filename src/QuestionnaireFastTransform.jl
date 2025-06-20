@@ -12,11 +12,52 @@ using StatsBase
 using SparseArrays
 using Base.Threads
 
-np=pyimport("numpy")
-pysys = pyimport("sys")
-push!(pysys["path"], @__DIR__)
-export get_Walsh_partition, build_kernel_permutations_new, ghwt_synthesis_aftermultiplication, Walsh_Multiplication, ghwt_2d_sparse, Walsh_Multiplication_fast, Walsh_Multiplication_fast2D, compress_dyadic_blocks, apply_compressed_operator 
 
+const _state = Dict{Symbol, Any}()
+
+# This block runs after precompilation, safe for dynamic operations
+function __init__()
+    pysys = pyimport("sys")
+    pyquest_path = joinpath(@__DIR__, "pyquest-master")
+
+    if !(pyquest_path in pysys["path"])
+        pushfirst!(pysys["path"], pyquest_path)
+    end
+
+    # Only import if available
+    try
+        _state[:quaest] = pyimport("Apply_questionnaire_to_data")
+        _state[:quaest_roseland] = pyimport("Apply_questionnaire_to_data_roseland")
+    catch e
+        @warn "Failed to import Apply_questionnaire_to_data" exception=e
+    end
+end
+
+#pysys = pyimport("sys")
+#pushfirst!(pysys["path"], abspath("pyquest-master"))  # or the full path if needed
+#quaest = pyimport("Apply_questionnaire_to_data")
+np=pyimport("numpy")
+#pysys = pyimport("sys")
+#push!(pysys["path"], @__DIR__)
+export get_Walsh_partition, build_kernel_permutations, build_kernel_permutations_new, ghwt_synthesis_aftermultiplication, Walsh_Multiplication, ghwt_2d_sparse, Walsh_Multiplication_fast, Walsh_Multiplication_fast2D, dyadic_partition, compress_dyadic_blocks, apply_compressed_operator,CompressedOperator, apply_operator
+
+import Base: *
+
+
+struct CompressedOperator
+    BL
+    P
+    col_order::Vector{Int}
+    row_order::Vector{Int}
+    dyadic_infos
+end
+
+function apply_operator(op::CompressedOperator, x::AbstractVector)
+    f = apply_compressed_operator(op.BL, op.P, x[op.col_order], op.dyadic_infos)
+    return f[invperm(op.row_order)]
+end
+
+*(op::CompressedOperator, x::AbstractVector) = apply_operator(op, x)
 
 function get_Walsh_partition(A)
     matrix=A
@@ -111,38 +152,76 @@ function get_inverse_permutation(perm)
     inverse=np.argsort(np.asarray(perm)) .+ 1
     return inverse
 end
-function build_kernel_permutations(A,oldtreebuilding::Bool = false,switchcos::Int = 0)
-    #heatmap(data_permuted)
-    if oldtreebuilding
-        qrun_permuted=quaest.main(A,oldtreebuilding,switchcos)
-    else
-        qrun_permuted=quaest.main(A,oldtreebuilding,switchcos)
+
+
+function build_kernel_permutations(A::AbstractMatrix, oldtreebuilding::Bool=false, switchcos::Int=0)
+    if !haskey(_state, :quaest)
+        error("Python module Apply_questionnaire_to_data not loaded")
     end
 
-    row_tree=qrun_permuted.row_trees[end]
-    col_tree=qrun_permuted.col_trees[end]
+    qpy = _state[:quaest]
 
-    coifman_col_order=[x.elements[1] for x in col_tree.dfs_leaves()] .+1
-    coifman_row_order=[x.elements[1] for x in row_tree.dfs_leaves()] .+1
+    # Call Python function
+    result = qpy["main"](A, oldtreebuilding, switchcos)
 
-    data_afterquest=A[coifman_row_order,coifman_col_order]
-    return data_afterquest,coifman_col_order,coifman_row_order,qrun_permuted
+    # Unpack result — ensure it's a tuple/list of length 3
+    if !(length(result) == 3)
+        error("Expected Python 'main' to return 3 outputs, got $(length(result))")
+    end
+
+    qrun_permuted, row_order, col_order = result
+
+    # Convert from 0-based to 1-based indexing for Julia
+    coifman_col_order = col_order .+ 1
+    coifman_row_order = row_order .+ 1
+
+    # Apply permutation
+    data_afterquest = A[coifman_row_order, coifman_col_order]
+
+    return data_afterquest, coifman_col_order, coifman_row_order, qrun_permuted
 end
 
-function build_kernel_permutations_new(A,oldtreebuilding::Bool = false,switchcos::Int = 0)
-    #heatmap(data_permuted)
-    if oldtreebuilding
-        qrun_permuted,row_order,col_order=quaest.main(A,oldtreebuilding,switchcos)
-    else
-        qrun_permuted,row_order,col_order=quaest.main(A,oldtreebuilding,switchcos)
+function build_kernel_permutations_new(A::AbstractMatrix, oldtreebuilding::Bool=false, switchcos::Int=0)
+    if !haskey(_state, :quaest_roseland)
+        error("Python module Apply_questionnaire_to_data not loaded")
     end
 
-    coifman_col_order= col_order.+1
-    coifman_row_order= row_order.+1
-    data_afterquest=A[coifman_row_order,coifman_col_order]
+    qpy = _state[:quaest_roseland]
+
+    # Call Python function
+    result = qpy["main"](A, oldtreebuilding, switchcos)
+
+    # Unpack result — ensure it's a tuple/list of length 3
+    if !(length(result) == 3)
+        error("Expected Python 'main' to return 3 outputs, got $(length(result))")
+    end
+
+    qrun_permuted, row_order, col_order = result
+
+    # Convert from 0-based to 1-based indexing for Julia
+    coifman_col_order = col_order .+ 1
+    coifman_row_order = row_order .+ 1
+
+    # Apply permutation
+    data_afterquest = A[coifman_row_order, coifman_col_order]
+
+    return data_afterquest, coifman_col_order, coifman_row_order, qrun_permuted
+end
+
+#function build_kernel_permutations_new(A,oldtreebuilding::Bool = false,switchcos::Int = 0)
+    #heatmap(data_permuted)
+#    if oldtreebuilding
+#        qrun_permuted,row_order,col_order=quaest.main(A,oldtreebuilding,switchcos)
+#    else
+#        qrun_permuted,row_order,col_order=quaest.main(A,oldtreebuilding,switchcos)
+#    end
+#
+#    coifman_col_order= col_order.+1
+#    coifman_row_order= row_order.+1
+#    data_afterquest=A[coifman_row_order,coifman_col_order]
     
-    return data_afterquest,coifman_col_order,coifman_row_order,qrun_permuted
-end
+#    return data_afterquest,coifman_col_order,coifman_row_order,qrun_permuted
+#end
 
 function plot_single(xdata,threeDtensor,arr_w,switch)
     nplots=size(threeDtensor)[2]
@@ -1721,6 +1800,8 @@ function apply_compressed_operator_Walsh4(B::Dict, alpha::Vector{Float64}, dyadi
     f = vcat([f_blocks[j] for j in 1:2^L]...)
     return f
 end
+
+
 
 
 end
