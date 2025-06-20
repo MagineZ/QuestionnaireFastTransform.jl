@@ -17,9 +17,10 @@ By default, PyCall uses your system Python (`/usr/bin/python3`). Make sure `nump
 python3 -m pip install numpy
 ```
 Alternatively, in Julia
-
+```julia
 ENV["PYTHON"] = ""
 using Pkg
 Pkg.build("PyCall")
 using Conda
 Conda.add("numpy")
+'''
