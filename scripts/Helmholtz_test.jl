@@ -4,7 +4,6 @@ using Plots
 using MultiscaleGraphSignalTransforms
 using LinearAlgebra
 
-
 println("Create Helmholtz Kernel")
 p = 10
 N = 2^p
